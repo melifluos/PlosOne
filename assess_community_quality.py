@@ -12,8 +12,7 @@ import numpy as np
 
 np.seterr(all='warn')  # To show floating point errors
 import pandas as pd
-import networkx as nx
-from datetime import datetime
+import argparse
 
 
 def calculate_PR(teleport_set, A, beta=0.85, n_iterations=2):
@@ -77,30 +76,30 @@ def get_cut(PR_vector, degree_vector, A):
     return min_conductance
 
 
-def create_graphml(A, communities, handles, output, threshold=0.0):
-    """
-    Produces a graph ml file suitable for visualising in Gephi
-    writes out to the path specified by output
-    not very efficient, but I can't find a vectorised way of adding attributes
-    :param A: signatures matrix
-    :param communities: The indices of the members of the communities. This can be either into the influencer of star matrix
-    :param handles: The handles of the community members
-    :param output:
-    :param threshold:
-    :return: None
-    """
-    g = nx.Graph()
-
-    internal_edges = A[:, communities]
-
-    for idx, handle in enumerate(handles):
-        g.add_node(idx, name=handle)
-        for out_idx, edge in enumerate(internal_edges[idx, :]):
-            if out_idx < idx:
-                if edge > threshold:
-                    g.add_edge(out_idx, idx, weight=float(edge))
-
-    nx.write_graphml(g, output)
+# def create_graphml(A, communities, handles, output, threshold=0.0):
+#     """
+#     Produces a graph ml file suitable for visualising in Gephi
+#     writes out to the path specified by output
+#     not very efficient, but I can't find a vectorised way of adding attributes
+#     :param A: signatures matrix
+#     :param communities: The indices of the members of the communities. This can be either into the influencer of star matrix
+#     :param handles: The handles of the community members
+#     :param output:
+#     :param threshold:
+#     :return: None
+#     """
+#     g = nx.Graph()
+#
+#     internal_edges = A[:, communities]
+#
+#     for idx, handle in enumerate(handles):
+#         g.add_node(idx, name=handle)
+#         for out_idx, edge in enumerate(internal_edges[idx, :]):
+#             if out_idx < idx:
+#                 if edge > threshold:
+#                     g.add_edge(out_idx, idx, weight=float(edge))
+#
+#     nx.write_graphml(g, output)
 
 
 def get_jaccards(community, all_data):
@@ -110,8 +109,8 @@ def get_jaccards(community, all_data):
     :param all_data: A pandas DataFrame containing the minhashes of the dataset
     :return A numpy array of minhash Jaccard estimates of shape(community.shape[0], all_data.shape[0])
     """
-    tag, df = community
-    community_size, n_hashes = df.shape
+
+    community_size, n_hashes = community.shape
     universe_size, _ = all_data.shape
 
     # if just_stars:
@@ -126,7 +125,7 @@ def get_jaccards(community, all_data):
     print 'calculating jaccard coefficients for', community_size, 'community members against universe of ', universe_size, ' members'
 
     jaccards = np.zeros((community_size, universe_size))
-    community_sigs = df.values
+    community_sigs = community.values
     all_sigs = all_data.values
     for idx in range(community_size):
         comparison_signature = community_sigs[idx, :]
@@ -298,25 +297,27 @@ def change_indices(indices, star_lookup):
     return star_indices
 
 
-def run_analysis_suite(community, data, generate_graphml=False):
+def run_analysis_suite(group, data, generate_graphml=False):
     """ 
     runs the full suite of community analysis metrics for a single community
     """
     # set the number of restarts for cohesiveness - each restart tries to find a different sub-community
     n_iterations = 10
 
+    tag, community = group
+
     # get the community size, this may not be the same as the number of ids as not all ids are indexed
-    community_size = data.shape[0]
+    community_size = community.shape[0]
     # extract all weighted edges for the community
 
     jaccs = get_jaccards(community, data)
     indices = community.index.values
-    # handles = star_lookup.index(indices)['handle']
-    # switch from influencer to star indices
-    # indices = change_indices(indices, star_lookup)
-    if generate_graphml:
-        create_graphml(jaccs, indices, handles,
-                       'local_results/' + tag + str(datetime.now().strftime("%Y%m%d-%H%M%S")) + '.graphml')
+    # # handles = star_lookup.index(indices)['handle']
+    # # switch from influencer to star indices
+    # # indices = change_indices(indices, star_lookup)
+    # if generate_graphml:
+    #     create_graphml(jaccs, indices, handles,
+    #                    'local_results/' + tag + str(datetime.now().strftime("%Y%m%d-%H%M%S")) + '.graphml')
     # get just internal edges
     internal_edges = jaccs[:, indices]
     assert np.trace(internal_edges) == community_size, 'error generating jaccards - all self jaccards should be 1'
@@ -339,11 +340,25 @@ def run_analysis_suite(community, data, generate_graphml=False):
 
 if __name__ == '__main__':
 
-    data = pd.read_csv('local_resources/plos_one_data.csv', index_col=0)
+    parser = argparse.ArgumentParser(description='Generate community features',
+                                     epilog='features are based just on the communities and not all of Twitter')
+    parser.add_argument(
+        'inpath', type=str,
+        nargs='+', default='local_resources/plos_one_data.csv', help='the location of the minhash file')
+    parser.add_argument(
+        'outpath', type=str,
+        nargs='+', default='results/community_analysis.csv', help='the location to write data to')
+
+    args = parser.parse_args()
+
+    print args.inpath[0]
+    print args.outpath[0]
+
+    data = pd.read_csv(args.inpath[0], index_col=0)
     data.index.name = 'community'
     data = data.reset_index()
 
-    full_path = 'results/community_analysis' + str(datetime.now().strftime("%Y%m%d-%H%M%S")) + '.csv'
+    full_path = args.outpath[0]
     header = ['community', 'size', 'clustering_coefficient', 'cohesiveness', 'conductance', 'conductance_ratio',
               'density', 'separability']
     with open(full_path, 'wb') as f:
@@ -351,10 +366,10 @@ if __name__ == '__main__':
         writer.writerow(header)
     grouped = data.groupby('community')
     for group in grouped:
-        results = run_analysis_suite(group, data, generate_graphml=True)
+        results = run_analysis_suite(group, data, generate_graphml=False)
         print header
         print 'results are ', results
         with open(full_path, 'ab') as f:
             writer = csv.writer(f)
-            output = [tag] + results
+            output = [grouped[0]] + results
             writer.writerow(output)
