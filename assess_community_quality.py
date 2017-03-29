@@ -371,5 +371,5 @@ if __name__ == '__main__':
         print 'results are ', results
         with open(full_path, 'ab') as f:
             writer = csv.writer(f)
-            output = [grouped[0]] + results
+            output = [group[0]] + results
             writer.writerow(output)
