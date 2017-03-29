@@ -69,7 +69,7 @@ def get_cut(PR_vector, degree_vector, A):
         if 2 * np.sum(cut_edges) > total_edge_volume:
             break  # due to the min in the denominator of conductance, no lower conductance can be found
         internal_edges = cut_edges[:, cut_indices]
-        internal_weight = get_internal_weight(internal_edges, community_size)
+        internal_weight = get_internal_weight(internal_edges)
         external_weight = get_external_weight(cut_edges, internal_weight)
         conductance = calculate_conductance(internal_weight, external_weight)
         min_conductance = min(min_conductance, conductance)
@@ -324,7 +324,7 @@ def run_analysis_suite(group, data, generate_graphml=False):
     # remove the self loops
     np.fill_diagonal(internal_edges, 0)
     # calculate some of the parameters of the metrics
-    internal_weight = get_internal_weight(internal_edges, community_size)
+    internal_weight = get_internal_weight(internal_edges)
     external_weight = get_external_weight(jaccs, internal_weight)
     # get the four metrics
     clustering_coefficient = calculate_clustering_coefficient(internal_edges)
