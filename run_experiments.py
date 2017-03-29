@@ -35,16 +35,15 @@ class CommunityDetector():
     A class to detect communities of stars using seed expansion techniques
     """
 
-    def __init__(self, use_lsh):
+    def __init__(self, data, outfolder, use_lsh):
         """
 
         :param use_lsh:
         :return:
         """
-        self.star_compression = star_index.StarCompression(network='twitter', filter='influencer')
-        self.star_lookup = self.star_compression.lookup
-        self.load_signatures()
+        self.signatures = data
         self.active_signatures = None
+        self.outfolder = outfolder
         if use_lsh:
             self.load_lsh_table()
         else:
@@ -52,52 +51,6 @@ class CommunityDetector():
         self.use_lsh = use_lsh
         self.lsh_candidates = None
 
-    def index_to_id(self, index):
-        """
-        star_lookup wrapper needed when working only with a subset of the stars
-        as we do in LSH. Converts star index to id
-        """
-        if self.lsh_candidates:
-            index = self.lsh_candidates.get_star_idx(index)
-        return self.star_lookup.index(index)['id']
-
-    def id_to_index(self, star_id):
-        """
-        star_lookup wrapper needed when working only with a subset of the stars
-        as we do in LSH. Converts star id to index
-        """
-        index = self.star_lookup.id(star_id)['index']
-        if self.lsh_candidates:
-            index = self.lsh_candidates.get_active_idx(index)
-        return index
-
-    def load_signatures(self):
-        """
-        reads signatures into memoryc
-        """
-        self.star_compression.load_signatures()
-        self.signatures = self.star_compression.get_signatures()
-
-    def read_seeds(self, path):
-        """
-        reads a list of seeds and their associated communities from file
-        """
-        seed_file = open(path, 'r')
-        seed_reader = csv.reader(seed_file)
-        # skip header
-        seed_reader.next()
-        retval = {}
-        for line in seed_reader:
-            try:
-                set = line[0]
-                if set not in retval:
-                    retval[set] = []
-                    # store (id,handle) tuples
-                retval[set].append((line[1], line[2]))
-            except IndexError:
-                pass
-
-        return retval
 
     def calculate_initial_average_similarity(self, communities):
         """
@@ -183,40 +136,6 @@ class CommunityDetector():
                         out_line.append(format(total_recall,
                                                '.4f'))  # recall won't improve as no more candidates
                     writer.writerow(out_line)
-
-    def build_initial_hashes(self, seeds):
-        """
-        Used to construct a mega-star, which is largely deprecated
-        builds a megastar on initialisation out of the seed signatures
-        """
-        n_hashes = self.active_signatures.shape[1]
-        n_communities = len(seeds)
-        # used to store the signature of the community
-        comparison_cols = np.zeros(shape=(n_communities, n_hashes))
-
-        # construct a mega-star for each set
-        for set, stars in seeds.iteritems():
-            first_id = True
-            for star_id in stars:
-                row_idx = self.id_to_index(star_id[0])
-                if first_id:  # set the comparison column to this signature
-                    first_id = False
-                    comparison_cols[int(set) - 1, :] = self.active_signatures[row_idx, :]
-                else:  # we want the min of this signature and the existing signature
-                    comparison_cols[int(set) - 1, :] = np.minimum(comparison_cols[int(set) - 1, :],
-                                                                  self.active_signatures[row_idx, :])
-
-        return comparison_cols
-
-    def unique_check(self, community, star_id, community_idx):
-        """
-        checks if a star is already a member of a community
-        if not, returns true
-        """
-        for star in community[str(community_idx + 1)]:
-            if star[0] == int(star_id):
-                return False  # star is already in here
-        return True  # go ahead and add this star
 
     def update_star_similarities(self, community_similarities, new_star, community, community_size):
         """
@@ -454,7 +373,7 @@ class CommunityDetector():
         return R.T
 
     def run_community_detection(self, community_folder, tags, seeds, excluded_set=None, community_sizes=None,
-                                n_stars=50, n_seeds=5, country='North America:United States',
+                                n_stars=50, n_seeds=5,
                                 min_seed_followers=1e4, use_union=False, max_followers=1e7, generate_seeds=True,
                                 result_interval=10, seed_file=None, runtime_file=None):
         """
@@ -466,7 +385,6 @@ class CommunityDetector():
         :param community sizes - the total size of the ground truthed communities
         :param n_stars - the maximum number of stars to grow the community to
         :param n_seeds: The number of seeds to use
-        :param country - the country to limit stars to - only use one as having multiple countries distorts community structure
         :param min_seed_followers - seeds need to have more than this number of followers
         :param use_union - represent the community as the union of all of the stars fans
         :param max_followers - don't allow any stars larger than this value to form communities
@@ -501,7 +419,6 @@ class CommunityDetector():
                 # implement a new lookup
         else:
             self.active_signatures = self.signatures
-
 
         # find the jaccard distance to all non-seeds averaged over the seeds
         ast0 = time()
@@ -546,38 +463,27 @@ class CommunityDetector():
         self.lsh_table = self.star_compression.get_lsh()
         print 'table read into memory in time ', time() - start, ' s'
 
-    def run_experimentation(self, n_stars, n_seeds, community_folder, min_seed_followers, random_seeds, result_interval,
-                            country, runtime_file=None, seed_file=None):
+
+    def run_experimentation(self, n_seeds, group, random_seeds, result_interval, runtime_file)
         """
         performs a series of community detection runs using different seeds
         and measure recall
-        :param n_stars: 300  # maximum number of stars to gather
         :param n_seeds = 5 # The number of seeds to start with
-        :param community_folder = 'local_resources/ICWSM15/taekwondo' # the name of the folder to look in
-        :param min_seed_followers = 1000
-        :param generate_seeds = True
         :param result_interval = 10 # the intervals in number of stars to snap the recall at
-        :param country = 'North America:United States' # the nationality of the seeds
         """
-        community_size = select_seeds.get_community_size(community_folder).values()[0]
+        community_size = self.signatures['community'].value_counts()
 
-        if not n_stars:  # use all stars in the community
-            n_stars = int(community_size[1])
-
-        if not n_seeds:  # use 10% of the community
-            n_seeds = int(community_size[1] / 10)
-
-        with open(community_folder + '/minrank.csv', 'wb') as f:
+        with open(self.outfolder + '/minrank.csv', 'wb') as f:
             writer = csv.writer(f)
             cols = xrange(result_interval, n_stars, result_interval)
             writer.writerow(cols)
 
-        with open(community_folder + '/initial_avgs.csv', 'wb') as f:
+        with open(self.outfolder + '/initial_avgs.csv', 'wb') as f:
             writer = csv.writer(f)
             cols = xrange(result_interval, n_stars, result_interval)
             writer.writerow(cols)
 
-        with open(community_folder + '/pagerank.csv', 'wb') as f:
+        with open(self.outfolder + '/pagerank.csv', 'wb') as f:
             writer = csv.writer(f)
             cols = xrange(result_interval, n_stars, result_interval)
             writer.writerow(cols)
@@ -597,45 +503,42 @@ class CommunityDetector():
         start_time = time()
 
         for idx, rdm_seed in enumerate(random_seeds):
-            seeds, community_sizes = select_seeds.generate_seeds(community_folder, n_seeds, True, country,
-                                                                 min_seed_followers, excluded_set, rdm_seed)
+            seeds = self.signatures
 
-        print seeds
+            print seeds
 
-        communities = self.run_community_detection(community_folder, tags, seeds, excluded_set, community_sizes,
-                                                   n_stars=n_stars, n_seeds=n_seeds, country=country,
-                                                   min_seed_followers=min_seed_followers, use_union=False,
-                                                   max_followers=1e7,
-                                                   generate_seeds=generate_seeds, result_interval=result_interval,
-                                                   seed_file=None, runtime_file=runtime_file)
-        print 'completed for ', n_stars, 'stars in ', time() - start_time
+            communities = self.run_community_detection(community_folder, tags, seeds, excluded_set, community_sizes,
+                                                       n_stars=n_stars, n_seeds=n_seeds, country=country,
+                                                       min_seed_followers=min_seed_followers, use_union=False,
+                                                       max_followers=1e7,
+                                                       generate_seeds=generate_seeds, result_interval=result_interval,
+                                                       seed_file=None, runtime_file=runtime_file)
+            print 'completed for ', n_stars, 'stars in ', time() - start_time
 
-        # print 'community shape ',communities
-        self.output_results(tags, communities, community_folder)
-        self.calculate_recall(tags, communities, community_folder, community_sizes, n_seeds, n_stars,
-                              result_interval)
+            # print 'community shape ',communities
+            self.output_results(tags, communities, community_folder)
+            self.calculate_recall(tags, communities, community_folder, community_sizes, n_seeds, n_stars,
+                                  result_interval)
 
-    print 'experimentation completed for ', len(random_seeds), ' random restarts in ', time() - start_time
+        print 'experimentation completed for ', len(random_seeds), ' random restarts in ', time() - start_time
 
 
 if __name__ == '__main__':
-    n_stars = None  # maximum number of stars to gather
     n_seeds = 30  # The number of seeds to start with
-    community_folder = 'local_resources/ICWSM15/'  # the name of the folder to look in
-    country = 'North America:United States'  # the nationality of the seeds
-    min_seed_followers = 1000
     result_interval = 10  # the intervals in number of stars to snap the recall at
+    random_seeds = [451235, 35631241, 2315, 346213456, 134]
 
+    inpath = 'local_resources/plos_one_data.csv'
+    outfolder = 'results'
+
+    data = pd.read_csv(inpath, index_col=0)
+    data.index.name = 'community'
+    data = data.reset_index()
+    community_detector = CommunityDetector(data, outfolder, use_lsh=True)
     with open('results/runtimes_' + str(n_seeds) + '.csv', 'wb') as runtime_file:
         writer = csv.writer(runtime_file)
         writer.writerow(['community', 'method', 'runtime'])
-
-    community_detector = CommunityDetector(use_lsh=True)
-
-    random_seeds = [451235, 35631241, 2315, 346213456, 134]
-    communities = pd.read_csv('local_resources/experimentation_tags.csv')
-    for community in communities['Community']:
-        print community
-        with open('local_resources/ICWSM15/runtimes_' + str(n_seeds) + '.csv', 'ab') as runtime_file:
-            community_detector.run_experimentation(n_stars, n_seeds, community_folder + community, min_seed_followers,
-                                                   random_seeds, result_interval, country, runtime_file)
+    with open('local_resources/ICWSM15/runtimes_' + str(n_seeds) + '.csv', 'ab') as runtime_file:
+        grouped = data.groupby('community')
+        for group in grouped:
+            community_detector.run_experimentation(n_seeds, group, random_seeds, result_interval, runtime_file)
